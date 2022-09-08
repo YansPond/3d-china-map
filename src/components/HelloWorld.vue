@@ -2,12 +2,18 @@
 import * as THREE from 'three'
 import * as d3 from "d3";
 import chinaJson from './Map/json/china.json'
+import { OrbitControls } from "three-orbitcontrols-ts";
 
+let uniforms = {
+    time: {
+        value: 0.0
+    }
+}
 // 添加场景scene
 const scene = new THREE.Scene();
 
 // 渲染器renderer
-const renderer = new THREE.WebGLRenderer();
+const renderer = new THREE.WebGLRenderer({antialias: true});
 
 // 设置renderer背景颜色
 renderer.setClearColor(0xffffff, 0.9);
@@ -21,6 +27,11 @@ const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerH
 camera.position.set(0,-70, 70);
 // 相机朝向
 camera.lookAt(0, 0, 0);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+// controls.autoRotate = true;
+controls.addEventListener("change", () => renderer.render( scene, camera )); //监听鼠标、键盘事件
+
 // 坐标辅助线
 const axesHelper = new THREE.AxesHelper( 500 );
 scene.add( axesHelper );
@@ -40,6 +51,8 @@ const projection = d3.geoMercator().center([104.0, 37.5]).scale(80).translate([0
 chinaJson.features.forEach((elem, index) => {
     // 定一个省份3D对象
     const province = new THREE.Object3D();
+    const provinceline = new THREE.Object3D();
+
     // 每个的 坐标 数组
     const { coordinates } = elem.geometry;
     const color = COLOR_ARR[index % COLOR_ARR.length]
@@ -47,13 +60,77 @@ chinaJson.features.forEach((elem, index) => {
     coordinates.forEach(multiPolygon => {
     multiPolygon.forEach((polygon) => {
         const shape = new THREE.Shape();
+        const points = [];
         for (let i = 0; i < polygon.length; i++) {
             let [x, y] = projection(polygon[i]);
+            points.push( new THREE.Vector3(x,-y,2));
             if (i === 0) {
                 shape.moveTo(x, -y);
             }
             shape.lineTo(x, -y);
         }
+        // 创建一条平滑的曲线
+        const curve = new THREE.CatmullRomCurve3( points, true );
+        const curvePoints = curve.getPoints( 5000 );
+        const line1 = new THREE.BufferGeometry().setFromPoints( curvePoints );
+
+        const length = curvePoints.length;
+		var percents = new Float32Array( length );
+		for (let i = 0; i < curvePoints.length; i += 1) {
+			percents[i] = ( i / length );
+		}
+        console.log(line1);
+
+		line1.setAttribute( 'percent', new THREE.BufferAttribute( percents, 1 ) );
+		
+
+      let material3 = new THREE.ShaderMaterial({
+        uniforms: {
+            time: uniforms.time,
+            number: { type: 'f', value: 1.0 },
+            speed: { type: 'f', value: 0.05 },
+            length: { type: 'f', value:  0.5 },
+            size: { type: 'f', value: 1.5},
+            color: { value: new THREE.Color("#F8D764") }
+        },
+        vertexShader: `
+            varying vec2 vUv;
+            attribute float percent;
+            uniform float time;
+            uniform float number;
+            uniform float speed;
+            uniform float length;
+            varying float opacity;
+            uniform float size;
+            void main()
+            {
+                vUv = uv;
+                vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
+                float l = clamp(1.0-length,0.0,1.0);
+                gl_PointSize = clamp(fract(percent*number + l - time*number*speed)-l ,0.0,1.) * size * (1./length);
+                opacity = gl_PointSize/size;
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            #ifdef GL_ES
+            precision mediump float;
+            #endif
+            varying float opacity;
+            uniform vec3 color;
+            void main(){
+                if(opacity <=0.2){
+                    gl_FragColor = vec4(0.0,0.0,0.0,1.0);
+                } else {
+                    gl_FragColor = vec4(color,1.0);
+                }
+            }
+		`,
+        transparent: true
+      });
+
+        const line = new THREE.Points( line1,  material3)
+
     // 挤压成立体形状
         const geometry = new THREE.ExtrudeGeometry(shape, {
             depth: 1,
@@ -61,8 +138,9 @@ chinaJson.features.forEach((elem, index) => {
             bevelSegments: 1,
             bevelThickness: 0.2
         });
+
         // 平面部分材质
-        const material = new THREE.MeshBasicMaterial( {
+        const material = new THREE.LineBasicMaterial( {
             metalness: 1,
             color: color,
         } );
@@ -86,9 +164,13 @@ chinaJson.features.forEach((elem, index) => {
         mesh.receiveShadow = true
         mesh._color = color
         province.add(mesh);
+        provinceline.add(line);
+
         })
     })
     scene.add(province)
+    scene.add(provinceline);
+
 })
 
 let ambientLight = new THREE.AmbientLight(0xffffff, 0.2); // 环境光
@@ -135,7 +217,7 @@ function onPointerMove( event ) {
 
 	pointer.x = ( event.clientX / window.innerWidth ) * 2 - 1;
 	pointer.y = - ( event.clientY / window.innerHeight ) * 2 + 1;
-  render()
+    render()
 }
 
 function render() {
@@ -143,14 +225,23 @@ function render() {
 	raycaster.setFromCamera( pointer, camera );
 	// 计算物体和射线的焦点
 	const intersects = raycaster.intersectObjects( scene.children );
-  console.log(intersects)
 	for ( let i = 0; i < intersects.length; i ++ ) {
 		intersects[ i ]?.object.material[0].color.set( 'yellow' );
 	}
-	renderer.render( scene, camera );
+    renderer.render( scene, camera );
+	
 }
-window.addEventListener( 'pointermove', onPointerMove );
-renderer.render(scene,camera);
+//window.addEventListener( 'pointermove', onPointerMove );
+
+function animate(){
+    uniforms.time.value += 0.07
+    renderer.render( scene, camera );
+    requestAnimationFrame(animate)
+}
+
+animate()
+
+
 </script>
 
 <template>
